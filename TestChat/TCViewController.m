@@ -41,7 +41,7 @@
     [self.tableView reloadData];
 }
 
-- (void)_reconnect;
+- (void)reconnect;
 {
     _webSocket.delegate = nil;
     [_webSocket close];
@@ -57,12 +57,12 @@
 - (void)viewWillAppear:(BOOL)animated
 {
     [super viewWillAppear:animated];
-    [self _reconnect];
+    [self reconnect];
 }
 
 - (void)reconnect:(id)sender;
 {
-    [self _reconnect];
+    [self reconnect];
 }
 
 - (void)sendPing:(id)sender;

@@ -180,7 +180,7 @@ typedef void (^data_callback)(SRWebSocket *webSocket,  NSData *data);
 
 - (void)writeData:(NSData *)data;
 - (void)closeWithProtocolError:(NSString *)message;
-- (void)failWithError:(NSError *)error;
+- (void)socketFailWithError:(NSError *)error;
 
 - (void)disconnect;
 
@@ -403,7 +403,7 @@ static __strong NSData *CRLFCRLF;
 }
 
 // Calls block on delegate queue
-- (void)performDelegateBlock:(dispatch_block_t)block;
+- (void)performSocketDelegateBlock:(dispatch_block_t)block;
 {
     if (_delegateOperationQueue) {
         [_delegateOperationQueue addOperationWithBlock:block];
@@ -446,12 +446,12 @@ static __strong NSData *CRLFCRLF;
     
     if (responseCode >= 400) {
         SRFastLog(@"Request failed with response code %d", responseCode);
-        [self failWithError:[NSError errorWithDomain:SRWebSocketErrorDomain code:2132 userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"received bad response code from server %ld", (long)responseCode], SRHTTPResponseErrorKey:@(responseCode)}]];
+        [self socketFailWithError:[NSError errorWithDomain:SRWebSocketErrorDomain code:2132 userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"received bad response code from server %ld", (long)responseCode], SRHTTPResponseErrorKey:@(responseCode)}]];
         return;
     }
     
     if(![self checkHandshake:_receivedHTTPHeaders]) {
-        [self failWithError:[NSError errorWithDomain:SRWebSocketErrorDomain code:2133 userInfo:[NSDictionary dictionaryWithObject:[NSString stringWithFormat:@"Invalid Sec-WebSocket-Accept response"] forKey:NSLocalizedDescriptionKey]]];
+        [self socketFailWithError:[NSError errorWithDomain:SRWebSocketErrorDomain code:2133 userInfo:[NSDictionary dictionaryWithObject:[NSString stringWithFormat:@"Invalid Sec-WebSocket-Accept response"] forKey:NSLocalizedDescriptionKey]]];
         return;
     }
     
@@ -459,7 +459,7 @@ static __strong NSData *CRLFCRLF;
     if (negotiatedProtocol) {
         // Make sure we requested the protocol
         if ([_requestedProtocols indexOfObject:negotiatedProtocol] == NSNotFound) {
-            [self failWithError:[NSError errorWithDomain:SRWebSocketErrorDomain code:2133 userInfo:[NSDictionary dictionaryWithObject:[NSString stringWithFormat:@"Server specified Sec-WebSocket-Protocol that wasn't requested"] forKey:NSLocalizedDescriptionKey]]];
+            [self socketFailWithError:[NSError errorWithDomain:SRWebSocketErrorDomain code:2133 userInfo:[NSDictionary dictionaryWithObject:[NSString stringWithFormat:@"Server specified Sec-WebSocket-Protocol that wasn't requested"] forKey:NSLocalizedDescriptionKey]]];
             return;
         }
         
@@ -472,7 +472,7 @@ static __strong NSData *CRLFCRLF;
         [self readFrameNew];
     }
 
-    [self performDelegateBlock:^{
+    [self performSocketDelegateBlock:^{
         if ([self.delegate respondsToSelector:@selector(webSocketDidOpen:)]) {
             [self.delegate webSocketDidOpen:self];
         };
@@ -669,7 +669,7 @@ static __strong NSData *CRLFCRLF;
 - (void)closeWithProtocolError:(NSString *)message;
 {
     // Need to shunt this on the _callbackQueue first to see if they received any messages 
-    [self performDelegateBlock:^{
+    [self performSocketDelegateBlock:^{
         [self closeWithCode:SRStatusCodeProtocolError reason:message];
         dispatch_async(_workQueue, ^{
             [self disconnect];
@@ -677,12 +677,12 @@ static __strong NSData *CRLFCRLF;
     }];
 }
 
-- (void)failWithError:(NSError *)error;
+- (void)socketFailWithError:(NSError *)error;
 {
     dispatch_async(_workQueue, ^{
         if (self.readyState != SR_CLOSED) {
             _failed = YES;
-            [self performDelegateBlock:^{
+            [self performSocketDelegateBlock:^{
                 if ([self.delegate respondsToSelector:@selector(webSocket:didFailWithError:)]) {
                     [self.delegate webSocket:self didFailWithError:error];
                 }
@@ -740,7 +740,7 @@ static __strong NSData *CRLFCRLF;
 - (void)handlePing:(NSData *)pingData;
 {
     // Need to pingpong this off _callbackQueue first to make sure messages happen in order
-    [self performDelegateBlock:^{
+    [self performSocketDelegateBlock:^{
         dispatch_async(_workQueue, ^{
             [self sendFrameWithOpcode:SROpCodePong data:pingData];
         });
@@ -750,17 +750,17 @@ static __strong NSData *CRLFCRLF;
 - (void)handlePong:(NSData *)pongData;
 {
     SRFastLog(@"Received pong");
-    [self performDelegateBlock:^{
+    [self performSocketDelegateBlock:^{
         if ([self.delegate respondsToSelector:@selector(webSocket:didReceivePong:)]) {
             [self.delegate webSocket:self didReceivePong:pongData];
         }
     }];
 }
 
-- (void)handleMessage:(id)message
+- (void)handleSocketMessage:(id)message
 {
     SRFastLog(@"Received message");
-    [self performDelegateBlock:^{
+    [self performSocketDelegateBlock:^{
         [self.delegate webSocket:self didReceiveMessage:message];
     }];
 }
@@ -871,11 +871,11 @@ static inline BOOL closeCodeIsValid(int closeCode) {
 
                 return;
             }
-            [self handleMessage:str];
+            [self handleSocketMessage:str];
             break;
         }
         case SROpCodeBinaryFrame:
-            [self handleMessage:[frameData copy]];
+            [self handleSocketMessage:[frameData copy]];
             break;
         case SROpCodeConnectionClose:
             [self handleCloseWithData:frameData];
@@ -1083,7 +1083,7 @@ static const uint8_t SRPayloadLenMask   = 0x7F;
     if (dataLength - _outputBufferOffset > 0 && _outputStream.hasSpaceAvailable) {
         NSInteger bytesWritten = [_outputStream write:_outputBuffer.bytes + _outputBufferOffset maxLength:dataLength - _outputBufferOffset];
         if (bytesWritten == -1) {
-            [self failWithError:[NSError errorWithDomain:SRWebSocketErrorDomain code:2145 userInfo:[NSDictionary dictionaryWithObject:@"Error writing to stream" forKey:NSLocalizedDescriptionKey]]];
+            [self socketFailWithError:[NSError errorWithDomain:SRWebSocketErrorDomain code:2145 userInfo:[NSDictionary dictionaryWithObject:@"Error writing to stream" forKey:NSLocalizedDescriptionKey]]];
              return;
         }
         
@@ -1111,7 +1111,7 @@ static const uint8_t SRPayloadLenMask   = 0x7F;
         }
         
         if (!_failed) {
-            [self performDelegateBlock:^{
+            [self performSocketDelegateBlock:^{
                 if ([self.delegate respondsToSelector:@selector(webSocket:didCloseWithCode:reason:wasClean:)]) {
                     [self.delegate webSocket:self didCloseWithCode:_closeCode reason:_closeReason wasClean:YES];
                 }
@@ -1411,7 +1411,7 @@ static const size_t SRFrameHeaderOverhead = 32;
             
             if (!_pinnedCertFound) {
                 dispatch_async(_workQueue, ^{
-                    [self failWithError:[NSError errorWithDomain:SRWebSocketErrorDomain code:23556 userInfo:[NSDictionary dictionaryWithObject:[NSString stringWithFormat:@"Invalid server cert"] forKey:NSLocalizedDescriptionKey]]];
+                    [self socketFailWithError:[NSError errorWithDomain:SRWebSocketErrorDomain code:23556 userInfo:[NSDictionary dictionaryWithObject:[NSString stringWithFormat:@"Invalid server cert"] forKey:NSLocalizedDescriptionKey]]];
                 });
                 return;
             }
@@ -1438,7 +1438,7 @@ static const size_t SRFrameHeaderOverhead = 32;
             case NSStreamEventErrorOccurred: {
                 SRFastLog(@"NSStreamEventErrorOccurred %@ %@", aStream, [[aStream streamError] copy]);
                 /// TODO specify error better!
-                [self failWithError:aStream.streamError];
+                [self socketFailWithError:aStream.streamError];
                 _readBufferOffset = 0;
                 [_readBuffer setLength:0];
                 break;
@@ -1449,7 +1449,7 @@ static const size_t SRFrameHeaderOverhead = 32;
                 [self pumpScanner];
                 SRFastLog(@"NSStreamEventEndEncountered %@", aStream);
                 if (aStream.streamError) {
-                    [self failWithError:aStream.streamError];
+                    [self socketFailWithError:aStream.streamError];
                 } else {
                     if (self.readyState != SR_CLOSED) {
                         self.readyState = SR_CLOSED;
@@ -1459,7 +1459,7 @@ static const size_t SRFrameHeaderOverhead = 32;
                     if (!_sentClose && !_failed) {
                         _sentClose = YES;
                         // If we get closed in this state it's probably not clean because we should be sending this when we send messages
-                        [self performDelegateBlock:^{
+                        [self performSocketDelegateBlock:^{
                             if ([self.delegate respondsToSelector:@selector(webSocket:didCloseWithCode:reason:wasClean:)]) {
                                 [self.delegate webSocket:self didCloseWithCode:SRStatusCodeGoingAway reason:@"Stream end encountered" wasClean:NO];
                             }
@@ -1481,7 +1481,7 @@ static const size_t SRFrameHeaderOverhead = 32;
                     if (bytes_read > 0) {
                         [_readBuffer appendBytes:buffer length:bytes_read];
                     } else if (bytes_read < 0) {
-                        [self failWithError:_inputStream.streamError];
+                        [self socketFailWithError:_inputStream.streamError];
                     }
                     
                     if (bytes_read != bufferSize) {
